@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Bus Tracker — Socket.IO Test</title>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; padding: 20px; }
+    h1 { text-align: center; margin-bottom: 20px; color: #38bdf8; }
+    .panels { display: flex; gap: 20px; flex-wrap: wrap; }
+    .panel { flex: 1; min-width: 300px; background: #1e293b; border-radius: 12px; padding: 20px; }
+    .panel h2 { margin-bottom: 12px; font-size: 18px; }
+    .parent h2 { color: #4ade80; }
+    .driver h2 { color: #fb923c; }
+    .admin h2 { color: #a78bfa; }
+    label { display: block; font-size: 12px; color: #94a3b8; margin-top: 10px; }
+    input, button { width: 100%; padding: 8px 12px; margin-top: 4px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; font-size: 14px; }
+    button { cursor: pointer; font-weight: 600; border: none; margin-top: 12px; }
+    .btn-connect { background: #3b82f6; }
+    .btn-connect:hover { background: #2563eb; }
+    .btn-start { background: #22c55e; }
+    .btn-start:hover { background: #16a34a; }
+    .btn-end { background: #ef4444; }
+    .btn-end:hover { background: #dc2626; }
+    .btn-send { background: #f59e0b; }
+    .btn-send:hover { background: #d97706; }
+    .btn-disconnect { background: #64748b; }
+    .btn-disconnect:hover { background: #475569; }
+    .log { margin-top: 16px; background: #0f172a; border-radius: 8px; padding: 12px; height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px; line-height: 1.6; border: 1px solid #334155; }
+    .log .time { color: #64748b; }
+    .log .event { color: #38bdf8; }
+    .log .data { color: #a5b4fc; }
+    .log .err { color: #f87171; }
+    .log .ok { color: #4ade80; }
+    .status { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+    .status.on { background: #4ade80; }
+    .status.off { background: #ef4444; }
+    .row { display: flex; gap: 8px; }
+    .row input { flex: 1; }
+  </style>
+</head>
+<body>
+  <h1>Bus Tracker — Socket.IO Test Panel</h1>
+  <div class="panels">
+
+    <!-- PARENT PANEL -->
+    <div class="panel parent">
+      <h2><span class="status off" id="p-status"></span> Parent</h2>
+      <label>JWT Token</label>
+      <input id="p-token" placeholder="Paste parent JWT here" />
+      <button class="btn-connect" onclick="connectParent()">Connect</button>
+      <button class="btn-disconnect" onclick="disconnectParent()">Disconnect</button>
+      <div class="log" id="p-log"></div>
+    </div>
+
+    <!-- DRIVER PANEL -->
+    <div class="panel driver">
+      <h2><span class="status off" id="d-status"></span> Driver</h2>
+      <label>JWT Token</label>
+      <input id="d-token" placeholder="Paste driver JWT here" />
+      <button class="btn-connect" onclick="connectDriver()">Connect</button>
+
+      <label>GPS Coordinates</label>
+      <div class="row">
+        <input id="d-lat" type="number" step="0.0001" value="28.6139" placeholder="lat" />
+        <input id="d-lng" type="number" step="0.0001" value="77.2090" placeholder="lng" />
+        <input id="d-speed" type="number" value="35" placeholder="speed" />
+      </div>
+      <button class="btn-send" onclick="sendLocation()">Send Location</button>
+      <button class="btn-disconnect" onclick="disconnectDriver()">Disconnect</button>
+      <div class="log" id="d-log"></div>
+    </div>
+
+    <!-- ADMIN PANEL -->
+    <div class="panel admin">
+      <h2><span class="status off" id="a-status"></span> Admin</h2>
+      <label>JWT Token</label>
+      <input id="a-token" placeholder="Paste admin JWT here" />
+      <button class="btn-connect" onclick="connectAdmin()">Connect</button>
+      <button class="btn-send" onclick="requestAllLocations()">Request All Locations</button>
+      <button class="btn-disconnect" onclick="disconnectAdmin()">Disconnect</button>
+      <div class="log" id="a-log"></div>
+    </div>
+  </div>
+
+  <script>
+    const SERVER = "http://localhost:4000";
+    let parentSocket = null;
+    let driverSocket = null;
+
+    function ts() {
+      return new Date().toLocaleTimeString();
+    }
+
+    function log(panelId, type, msg) {
+      const el = document.getElementById(panelId);
+      const cls = type === "err" ? "err" : type === "ok" ? "ok" : type === "event" ? "event" : "data";
+      el.innerHTML += `<div><span class="time">[${ts()}]</span> <span class="${cls}">${msg}</span></div>`;
+      el.scrollTop = el.scrollHeight;
+    }
+
+    // ── PARENT ─────────────────────────────────────────────────
+    function connectParent() {
+      const token = document.getElementById("p-token").value.trim();
+      if (!token) return log("p-log", "err", "Paste a token first");
+
+      parentSocket = io(SERVER, { auth: { token } });
+
+      parentSocket.on("connect", () => {
+        document.getElementById("p-status").className = "status on";
+        log("p-log", "ok", `Connected (id: ${parentSocket.id})`);
+      });
+
+      parentSocket.on("connect_error", (err) => {
+        document.getElementById("p-status").className = "status off";
+        log("p-log", "err", `Connection failed: ${err.message}`);
+      });
+
+      parentSocket.on("trip_started", (data) => {
+        log("p-log", "event", `🚌 TRIP STARTED`);
+        log("p-log", "data", JSON.stringify(data, null, 2));
+      });
+
+      parentSocket.on("location_update", (data) => {
+        log("p-log", "event", `📍 LOCATION UPDATE`);
+        log("p-log", "data", `lat: ${data.lat}, lng: ${data.lng}, speed: ${data.speed}, time: ${data.timestamp}`);
+      });
+
+      parentSocket.on("trip_ended", (data) => {
+        log("p-log", "event", `🛑 TRIP ENDED`);
+        log("p-log", "data", JSON.stringify(data, null, 2));
+      });
+
+      parentSocket.on("error", (data) => {
+        log("p-log", "err", `Error: ${data.message}`);
+      });
+
+      parentSocket.on("disconnect", (reason) => {
+        document.getElementById("p-status").className = "status off";
+        log("p-log", "err", `Disconnected: ${reason}`);
+      });
+    }
+
+    function disconnectParent() {
+      if (parentSocket) { parentSocket.disconnect(); parentSocket = null; }
+    }
+
+    // ── DRIVER ─────────────────────────────────────────────────
+    function connectDriver() {
+      const token = document.getElementById("d-token").value.trim();
+      if (!token) return log("d-log", "err", "Paste a token first");
+
+      driverSocket = io(SERVER, { auth: { token } });
+
+      driverSocket.on("connect", () => {
+        document.getElementById("d-status").className = "status on";
+        log("d-log", "ok", `Connected (id: ${driverSocket.id})`);
+      });
+
+      driverSocket.on("connect_error", (err) => {
+        document.getElementById("d-status").className = "status off";
+        log("d-log", "err", `Connection failed: ${err.message}`);
+      });
+
+      driverSocket.on("trip_started", (data) => {
+        log("d-log", "event", `🚌 TRIP STARTED (echo)`);
+      });
+
+      driverSocket.on("trip_ended", (data) => {
+        log("d-log", "event", `🛑 TRIP ENDED (echo)`);
+      });
+
+      driverSocket.on("error", (data) => {
+        log("d-log", "err", `Error: ${data.message}`);
+      });
+
+      driverSocket.on("disconnect", (reason) => {
+        document.getElementById("d-status").className = "status off";
+        log("d-log", "err", `Disconnected: ${reason}`);
+      });
+    }
+
+    function sendLocation() {
+      if (!driverSocket || !driverSocket.connected) {
+        return log("d-log", "err", "Not connected. Connect first.");
+      }
+      const lat = parseFloat(document.getElementById("d-lat").value);
+      const lng = parseFloat(document.getElementById("d-lng").value);
+      const speed = parseFloat(document.getElementById("d-speed").value);
+      driverSocket.emit("location_update", { lat, lng, speed });
+      log("d-log", "ok", `Sent: lat=${lat}, lng=${lng}, speed=${speed}`);
+    }
+
+    function disconnectDriver() {
+      if (driverSocket) { driverSocket.disconnect(); driverSocket = null; }
+    }
+
+    // ── ADMIN ──────────────────────────────────────────────────
+    let adminSocket = null;
+
+    function connectAdmin() {
+      const token = document.getElementById("a-token").value.trim();
+      if (!token) return log("a-log", "err", "Paste a token first");
+
+      adminSocket = io(SERVER, { auth: { token } });
+
+      adminSocket.on("connect", () => {
+        document.getElementById("a-status").className = "status on";
+        log("a-log", "ok", `Connected (id: ${adminSocket.id})`);
+      });
+
+      adminSocket.on("connect_error", (err) => {
+        document.getElementById("a-status").className = "status off";
+        log("a-log", "err", `Connection failed: ${err.message}`);
+      });
+
+      adminSocket.on("all_locations", (data) => {
+        log("a-log", "event", `ALL LOCATIONS (${data.length} bus(es))`);
+        data.forEach((loc) => {
+          log("a-log", "data", `Bus ${loc.busId}: lat=${loc.lat}, lng=${loc.lng}, speed=${loc.speed}`);
+        });
+      });
+
+      adminSocket.on("bus_location_update", (data) => {
+        log("a-log", "event", `BUS LOCATION UPDATE`);
+        log("a-log", "data", `Bus ${data.busId}: lat=${data.lat}, lng=${data.lng}, speed=${data.speed}`);
+      });
+
+      adminSocket.on("trip_started", (data) => {
+        log("a-log", "event", `TRIP STARTED`);
+        log("a-log", "data", JSON.stringify(data, null, 2));
+      });
+
+      adminSocket.on("trip_ended", (data) => {
+        log("a-log", "event", `TRIP ENDED`);
+        log("a-log", "data", JSON.stringify(data, null, 2));
+      });
+
+      adminSocket.on("error", (data) => {
+        log("a-log", "err", `Error: ${data.message}`);
+      });
+
+      adminSocket.on("disconnect", (reason) => {
+        document.getElementById("a-status").className = "status off";
+        log("a-log", "err", `Disconnected: ${reason}`);
+      });
+    }
+
+    function requestAllLocations() {
+      if (!adminSocket || !adminSocket.connected) {
+        return log("a-log", "err", "Not connected. Connect first.");
+      }
+      adminSocket.emit("request_all_locations");
+      log("a-log", "ok", "Requested all live locations...");
+    }
+
+    function disconnectAdmin() {
+      if (adminSocket) { adminSocket.disconnect(); adminSocket = null; }
+    }
+  </script>
+</body>
+</html>
