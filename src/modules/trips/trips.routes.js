@@ -22,8 +22,8 @@ router.post("/end", authorize("driver"), endTrip);
 router.post("/current/board", authorize("driver"), boardStudents);
 router.post("/current/unboard", authorize("driver"), unboardStudents);
 
-// Parent endpoint
-router.get("/current", authorize("parent"), currentTrip);
+// Parent + driver: view current trip for assigned bus
+router.get("/current", authorize("parent", "driver"), currentTrip);
 
 // Admin endpoints
 router.get("/", authorize("admin"), getTrips);

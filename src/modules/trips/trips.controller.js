@@ -170,20 +170,20 @@ const endTrip = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────
-// GET /api/trips/current  (Parent only)
+// GET /api/trips/current  (Parent + Driver)
 // ─────────────────────────────────────────────────────────────────────────
 const currentTrip = async (req, res) => {
   try {
-    const { schoolId, busId } = req.user;
+    const { busId } = req.user;
 
     if (!busId) {
       return success(res, { status: "NOT_RUNNING" }, "No bus assigned.");
     }
 
-    // ── Find ACTIVE trip for parent's bus, scoped to their school ─────
+    // ── Find ACTIVE trip for the user's assigned bus ───────────────────
+    // Use bus-level lookup to stay consistent with startTrip conflict checks.
     const trip = await Trip.findOne({
       busId,
-      schoolId,
       status: TRIP_STATUS.ACTIVE
     })
       .populate("busId", "busNumber")
