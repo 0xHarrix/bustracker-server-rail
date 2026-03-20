@@ -4,12 +4,15 @@ const User = require("../modules/users/user.model");
 const Trip = require("../modules/trips/trip.model");
 const { TRIP_STATUS } = require("../modules/trips/trip.model");
 const socketManager = require("./socketManager");
+const { computeEtaForBus } = require("../services/eta/eta.service");
 
 // ── Config ───────────────────────────────────────────────────────────────
 const MIN_UPDATE_INTERVAL_MS = 3000; // 3 second minimum between GPS updates
 
 // ── Rate limit tracker: driverId -> last emit timestamp ──────────────────
 const lastEmitTimestamps = {};
+const lastEtaCalcTimestamps = {};
+const ETA_CALC_INTERVAL_MS = 30000;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Socket authentication middleware
@@ -64,6 +67,17 @@ const authenticateSocket = async (socket, next) => {
 // ─────────────────────────────────────────────────────────────────────────
 const joinRoomByRole = (socket) => {
   const { role, busId, userId } = socket.user;
+
+  switch (role) {
+    case "parent":
+    case "driver":
+    case "admin": {
+      socket.join(`user_${userId}`);
+      break;
+    }
+    default:
+      break;
+  }
 
   switch (role) {
     case "parent": {
@@ -209,6 +223,26 @@ const handleLocationUpdate = async (socket, io, data) => {
 
   // ── Broadcast to admins in the school room ──────────────────────
   io.to(`school_${schoolId}`).emit("bus_location_update", locationPayload);
+
+  // ── Compute and broadcast ETA (throttled) ─────────────────────────
+  const lastEtaCalcAt = lastEtaCalcTimestamps[busId] || 0;
+  if (now - lastEtaCalcAt >= ETA_CALC_INTERVAL_MS) {
+    lastEtaCalcTimestamps[busId] = now;
+    try {
+      const eta = await computeEtaForBus({
+        schoolId,
+        busId,
+        origin: { lat, lng }
+      });
+      if (eta) {
+        socketManager.setLatestEta(busId, eta);
+        io.to(`bus_${busId}`).emit("eta_update", eta);
+        io.to(`school_${schoolId}`).emit("eta_update", eta);
+      }
+    } catch (etaErr) {
+      console.error("[Socket] ETA compute error:", etaErr.message);
+    }
+  }
 };
 
 // ─────────────────────────────────────────────────────────────────────────

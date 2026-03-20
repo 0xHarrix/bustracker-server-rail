@@ -80,7 +80,7 @@ const getBuses = async (req, res) => {
       const occupied = await User.countDocuments({
         busId: bus._id,
         schoolId,
-        role: "parent",
+        role: { $in: ["parent", "student"] },
         isActive: true
       });
       bus.occupied = occupied;
@@ -118,9 +118,9 @@ const getBusById = async (req, res) => {
     const students = await User.find({
       schoolId,
       busId: bus._id,
-      role: "parent"
+      role: { $in: ["parent", "student"] }
     })
-      .select("name phone rollNumber isActive")
+      .select("name phone rollNumber isActive role parentId")
       .sort({ name: 1 })
       .lean();
 

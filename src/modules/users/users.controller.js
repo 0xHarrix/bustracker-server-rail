@@ -22,7 +22,7 @@ const getBusOccupancy = async (busId, schoolId) => {
   const occupied = await User.countDocuments({
     busId,
     schoolId,
-    role: "parent",
+    role: { $in: ["parent", "student"] },
     isActive: true
   });
   return { occupied };
@@ -33,15 +33,15 @@ const getBusOccupancy = async (busId, schoolId) => {
 // ─────────────────────────────────────────────────────────────────────────
 const createUser = async (req, res) => {
   try {
-    const { name, phone, rollNumber, password, role, schoolId, busId } = req.body;
+    const { name, phone, rollNumber, password, role, schoolId, busId, parentId } = req.body;
 
     // ── Required field validation ─────────────────────────────────────
     if (!name || !role || !schoolId) {
       return badRequest(res, "name, role, and schoolId are required.");
     }
 
-    if (!["admin", "driver", "parent"].includes(role)) {
-      return badRequest(res, "role must be admin, driver, or parent.");
+    if (!["admin", "driver", "parent", "student"].includes(role)) {
+      return badRequest(res, "role must be admin, driver, parent, or student.");
     }
 
     if (!mongoose.Types.ObjectId.isValid(schoolId)) {
@@ -51,10 +51,13 @@ const createUser = async (req, res) => {
     if (busId && !mongoose.Types.ObjectId.isValid(busId)) {
       return badRequest(res, "Invalid busId.");
     }
+    if (parentId && !mongoose.Types.ObjectId.isValid(parentId)) {
+      return badRequest(res, "Invalid parentId.");
+    }
 
-    // Parents must have at least phone or rollNumber
-    if (role === "parent" && !phone && !rollNumber) {
-      return badRequest(res, "Parents must have at least a phone number or roll number.");
+    // Parent/Student records must have at least phone or rollNumber
+    if ((role === "parent" || role === "student") && !phone && !rollNumber) {
+      return badRequest(res, "Parent/Student records must have at least a phone number or roll number.");
     }
 
     // ── Verify school exists ──────────────────────────────────────────
@@ -65,6 +68,21 @@ const createUser = async (req, res) => {
 
     if (!school.isActive) {
       return badRequest(res, "Cannot add users to an inactive school.");
+    }
+
+    // Students can optionally be linked to a parent user.
+    let validatedParentId = null;
+    if (role === "student" && parentId) {
+      const parent = await User.findOne({
+        _id: parentId,
+        schoolId,
+        role: "parent",
+        isActive: true
+      }).lean();
+      if (!parent) {
+        return badRequest(res, "parentId must refer to an active parent in the same school.");
+      }
+      validatedParentId = parent._id;
     }
 
     // ── Normalize and check uniqueness within school ──────────────────
@@ -104,6 +122,7 @@ const createUser = async (req, res) => {
       rollNumber: trimmedRollNumber,
       password: hashedPassword,
       role,
+      parentId: validatedParentId,
       schoolId,
       busId: busId || null,
       isActive: true
@@ -128,7 +147,7 @@ const getUsers = async (req, res) => {
     const { role } = req.query;
 
     const filter = { schoolId };
-    if (role && ["admin", "driver", "parent"].includes(role)) {
+    if (role && ["admin", "driver", "parent", "student"].includes(role)) {
       filter.role = role;
     }
 
@@ -199,8 +218,8 @@ const assignBus = async (req, res) => {
       return notFound(res, "User not found in your school.");
     }
 
-    if (user.role !== "parent") {
-      return badRequest(res, "Only parents can be assigned to a bus.");
+    if (!["parent", "student"].includes(user.role)) {
+      return badRequest(res, "Only parents or students can be assigned to a bus.");
     }
 
     if (!user.isActive) {
@@ -369,8 +388,8 @@ const bulkAssignBus = async (req, res) => {
         continue;
       }
 
-      if (user.role !== "parent") {
-        results.failed.push({ userId, name: user.name, reason: "Only parents can be assigned to a bus." });
+      if (!["parent", "student"].includes(user.role)) {
+        results.failed.push({ userId, name: user.name, reason: "Only parents or students can be assigned to a bus." });
         continue;
       }
 

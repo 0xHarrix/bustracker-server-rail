@@ -7,7 +7,9 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "seed": "node src/scripts/seed.js",
-    "test:trip": "node scripts/test-trip-boarding.js"
+    "test:trip": "node scripts/test-trip-boarding.js",
+    "migrate:parent-student": "node scripts/migrate-parent-student.js",
+    "check:parent-student": "node scripts/check-parent-student-consistency.js"
   },
   "keywords": [],
   "author": "",

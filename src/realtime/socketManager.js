@@ -22,6 +22,7 @@ const activeTrips = {};
 // Updated on every valid GPS emit from driver.
 // Used by admin to see all live bus positions.
 const lastLocations = {};
+const latestEtaByBus = {};
 
 const setIO = (io) => {
   _io = io;
@@ -47,6 +48,7 @@ const addActiveTrip = (busId, tripId) => {
 const removeActiveTrip = (busId) => {
   delete activeTrips[busId];
   delete lastLocations[busId];
+  delete latestEtaByBus[busId];
 };
 
 /**
@@ -89,6 +91,14 @@ const getAllLocationsForSchool = (schoolId) => {
   );
 };
 
+const setLatestEta = (busId, etaPayload) => {
+  latestEtaByBus[busId] = etaPayload;
+};
+
+const getLatestEta = (busId) => {
+  return latestEtaByBus[busId] || null;
+};
+
 module.exports = {
   setIO,
   getIO,
@@ -99,5 +109,7 @@ module.exports = {
   lastLocations,
   setLastLocation,
   getLastLocation,
-  getAllLocationsForSchool
+  getAllLocationsForSchool,
+  setLatestEta,
+  getLatestEta
 };

@@ -4,12 +4,36 @@ const { TRIP_STATUS } = require("./trip.model");
 const Bus = require("../buses/bus.model");
 const User = require("../users/user.model");
 const socketManager = require("../../realtime/socketManager");
+const AttendanceEvent = require("../attendance/attendance-event.model");
+const { ATTENDANCE_EVENT_TYPE } = require("../attendance/attendance-event.model");
+const { notifyUsers } = require("../notifications/notification.service");
+const { computeEtaForBus } = require("../../services/eta/eta.service");
 const {
   success,
   badRequest,
   notFound,
   conflict
 } = require("../../utils/response");
+
+const resolveNotificationRecipients = (users = []) => {
+  const ids = new Set();
+  users.forEach((user) => {
+    if (!user) return;
+    // Legacy model: parent record acts as student.
+    if (user.role === "parent") {
+      ids.add(user._id.toString());
+      return;
+    }
+    // New model: student records notify linked parent if present.
+    if (user.parentId) {
+      ids.add(user.parentId.toString());
+      return;
+    }
+    // Fallback to student user itself if no parent is linked.
+    ids.add(user._id.toString());
+  });
+  return Array.from(ids);
+};
 
 // ─────────────────────────────────────────────────────────────────────────
 // POST /api/trips/start  (Driver only)
@@ -209,7 +233,8 @@ const currentTrip = async (req, res) => {
 const boardStudents = async (req, res) => {
   try {
     const { userId, schoolId, busId } = req.user;
-    const { studentId, studentIds } = req.body;
+    const { studentId, studentIds, stopName, stopSequence } = req.body;
+    const parsedStopSequence = Number.isFinite(Number(stopSequence)) ? Number(stopSequence) : null;
 
     if (!busId) {
       return badRequest(res, "You are not assigned to any bus.");
@@ -251,9 +276,9 @@ const boardStudents = async (req, res) => {
       _id: { $in: validIds },
       schoolId: schoolIdObj,
       busId: busIdObj,
-      role: "parent",
+      role: { $in: ["parent", "student"] },
       isActive: true
-    }).select("_id").lean();
+    }).select("_id name role parentId").lean();
 
     const toAdd = users.map((u) => u._id);
     if (toAdd.length === 0) {
@@ -268,6 +293,49 @@ const boardStudents = async (req, res) => {
       { _id: { $in: toAdd }, schoolId },
       { $set: { currentBusId: trip.busId } }
     );
+
+    if (toAdd.length > 0) {
+      await AttendanceEvent.insertMany(
+        toAdd.map((studentObjectId) => ({
+          schoolId,
+          busId: trip.busId,
+          tripId: trip._id,
+          studentId: studentObjectId,
+          driverId: userId,
+          eventType: ATTENDANCE_EVENT_TYPE.PICKED_UP,
+          stopName: stopName || null,
+          stopSequence: parsedStopSequence,
+          actualTime: new Date()
+        }))
+      );
+
+      const recipientIds = resolveNotificationRecipients(users);
+      await notifyUsers({
+        schoolId,
+        userIds: recipientIds,
+        title: "Pickup confirmed",
+        message: `Pickup confirmed${stopName ? ` at ${stopName}` : ""}.`,
+        type: "PICKUP_CONFIRMED",
+        data: {
+          tripId: trip._id.toString(),
+          busId: trip.busId.toString(),
+          stopName: stopName || null,
+          stopSequence: parsedStopSequence
+        }
+      });
+    }
+
+    const io = socketManager.getIO();
+    if (io) {
+      io.to(`bus_${busId}`).emit("pickup_confirmed", {
+        tripId: trip._id,
+        busId,
+        studentIds: toAdd.map((id) => id.toString()),
+        stopName: stopName || null,
+        stopSequence: parsedStopSequence,
+        timestamp: new Date().toISOString()
+      });
+    }
 
     const tripUpdated = await Trip.findById(trip._id)
       .populate("busId", "busNumber")
@@ -293,7 +361,8 @@ const boardStudents = async (req, res) => {
 const unboardStudents = async (req, res) => {
   try {
     const { userId, schoolId, busId } = req.user;
-    const { studentId, studentIds } = req.body;
+    const { studentId, studentIds, stopName, stopSequence } = req.body;
+    const parsedStopSequence = Number.isFinite(Number(stopSequence)) ? Number(stopSequence) : null;
 
     if (!busId) {
       return badRequest(res, "You are not assigned to any bus.");
@@ -331,6 +400,57 @@ const unboardStudents = async (req, res) => {
       { _id: { $in: validIds }, schoolId, currentBusId: trip.busId },
       { $set: { currentBusId: null } }
     );
+
+    const dropCandidates = await User.find({
+      _id: { $in: validIds },
+      schoolId,
+      role: { $in: ["parent", "student"] }
+    })
+      .select("_id role parentId")
+      .lean();
+
+    if (dropCandidates.length > 0) {
+      await AttendanceEvent.insertMany(
+        dropCandidates.map((student) => ({
+          schoolId,
+          busId: trip.busId,
+          tripId: trip._id,
+          studentId: student._id,
+          driverId: userId,
+          eventType: ATTENDANCE_EVENT_TYPE.DROPPED,
+          stopName: stopName || null,
+          stopSequence: parsedStopSequence,
+          actualTime: new Date()
+        }))
+      );
+
+      const recipientIds = resolveNotificationRecipients(dropCandidates);
+      await notifyUsers({
+        schoolId,
+        userIds: recipientIds,
+        title: "Drop confirmed",
+        message: `Drop confirmed${stopName ? ` at ${stopName}` : ""}.`,
+        type: "DROP_CONFIRMED",
+        data: {
+          tripId: trip._id.toString(),
+          busId: trip.busId.toString(),
+          stopName: stopName || null,
+          stopSequence: parsedStopSequence
+        }
+      });
+    }
+
+    const io = socketManager.getIO();
+    if (io) {
+      io.to(`bus_${busId}`).emit("drop_confirmed", {
+        tripId: trip._id,
+        busId,
+        studentIds: dropCandidates.map((item) => item._id.toString()),
+        stopName: stopName || null,
+        stopSequence: parsedStopSequence,
+        timestamp: new Date().toISOString()
+      });
+    }
 
     const tripUpdated = await Trip.findById(trip._id)
       .populate("busId", "busNumber")
@@ -417,6 +537,43 @@ const getTripById = async (req, res) => {
   }
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// GET /api/trips/current/eta  (Parent + Driver + Admin)
+// ─────────────────────────────────────────────────────────────────────────
+const getCurrentEta = async (req, res) => {
+  try {
+    const { role, schoolId, busId: userBusId, userId } = req.user;
+    const requestedBusId = req.query.busId;
+
+    const targetBusId = role === "admin" ? requestedBusId : userBusId;
+    if (!targetBusId) {
+      return badRequest(res, "busId is required.");
+    }
+
+    const lastLocation = socketManager.getLastLocation(targetBusId);
+    if (!lastLocation) {
+      return success(res, { status: "NO_LIVE_LOCATION" }, "No live location available.");
+    }
+
+    const eta = await computeEtaForBus({
+      schoolId,
+      busId: targetBusId,
+      origin: { lat: lastLocation.lat, lng: lastLocation.lng },
+      userId: role === "parent" ? userId : null
+    });
+
+    if (!eta) {
+      return success(res, { status: "NO_ROUTE_CONFIGURED" }, "No active route configured.");
+    }
+
+    socketManager.setLatestEta(targetBusId, eta);
+    return success(res, eta);
+  } catch (err) {
+    console.error("Current ETA error:", err);
+    return badRequest(res, "Failed to fetch ETA.");
+  }
+};
+
 module.exports = {
   startTrip,
   endTrip,
@@ -424,5 +581,6 @@ module.exports = {
   boardStudents,
   unboardStudents,
   getTrips,
-  getTripById
+  getTripById,
+  getCurrentEta
 };

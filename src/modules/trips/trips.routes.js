@@ -8,7 +8,8 @@ const {
   boardStudents,
   unboardStudents,
   getTrips,
-  getTripById
+  getTripById,
+  getCurrentEta
 } = require("./trips.controller");
 
 const router = express.Router();
@@ -21,9 +22,12 @@ router.post("/start", authorize("driver"), startTrip);
 router.post("/end", authorize("driver"), endTrip);
 router.post("/current/board", authorize("driver"), boardStudents);
 router.post("/current/unboard", authorize("driver"), unboardStudents);
+router.post("/current/pickup-confirmation", authorize("driver"), boardStudents);
+router.post("/current/drop-confirmation", authorize("driver"), unboardStudents);
 
-// Parent + driver: view current trip for assigned bus
+// Parent + Driver endpoint
 router.get("/current", authorize("parent", "driver"), currentTrip);
+router.get("/current/eta", authorize("admin", "parent", "driver"), getCurrentEta);
 
 // Admin endpoints
 router.get("/", authorize("admin"), getTrips);

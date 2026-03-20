@@ -28,10 +28,16 @@ const userSchema = new mongoose.Schema(
     role: {
       type: String,
       enum: {
-        values: ["admin", "driver", "parent"],
-        message: "Role must be admin, driver, or parent"
+        values: ["admin", "driver", "parent", "student"],
+        message: "Role must be admin, driver, parent, or student"
       },
       required: [true, "Role is required"]
+    },
+    // For student profiles, links the student to a parent account.
+    parentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null
     },
 
     schoolId: {
@@ -85,6 +91,10 @@ userSchema.index(
 
 // Fast lookup for login by school + role
 userSchema.index({ schoolId: 1, role: 1 });
+userSchema.index(
+  { parentId: 1 },
+  { sparse: true, partialFilterExpression: { parentId: { $ne: null } } }
+);
 
 // Who is currently on a bus (boarded)
 userSchema.index(
